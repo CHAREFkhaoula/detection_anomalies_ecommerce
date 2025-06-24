@@ -1,0 +1,29 @@
+# Environnements virtuels
+.venv/
+__pycache__/
+*.pyc
+*.pkl
+*.csv
+*.json
+*.zip
+*.tar.gz
+.venv/
+.env
+.git/
+*.ipynb
+*.log
+# Données brutes ou volumineuses
+producer/app/large_ecommerce_transactions.csv
+spark_consumer/app/checkpoints/
+spark_consumer/app/logs/
+spark_consumer/model/*.joblib
+spark_consumer/model/*.json
+./producer/app/large_ecommerce_transactions.csv
+./spark_consumer/model/isolation_forest_model.joblib
+# Fichiers lourds à ne pas traquer
+*.joblib
+*.csv
+checkpoints/
+logs/
+.venv/
+

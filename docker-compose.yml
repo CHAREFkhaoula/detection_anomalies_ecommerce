@@ -1,0 +1,194 @@
+version: '3'
+networks:
+  kafka-net:
+    driver: bridge
+    name: kafka-net
+    labels:
+      com.docker.compose.network: "kafka-net"
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+    healthcheck:
+      test: ['CMD', 'bash', '-c', "echo 'ruok' | nc localhost 2181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kafka-net
+
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://${HOST_IP:-localhost}:9092,INTERNAL://kafka:29092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server kafka:29092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+    networks:
+      - kafka-net
+
+  spark-master:
+    image: bitnami/spark:3.5.1
+    container_name: spark-master
+    hostname: spark-master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - SPARK_DAEMON_MEMORY=1g
+      - SPARK_PUBLIC_DNS=spark-master
+      - SPARK_LOCAL_IP=spark-master
+    ports:
+      - "7077:7077" # Spark master port
+      - "8080:8080" # Spark master web UI port
+    volumes:
+      - ./spark_consumer:/app
+    networks:
+      - kafka-net
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  spark-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
+    image: custom-spark:3.5.1
+    hostname: spark-worker
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    ports:
+      - "8081:8081"  # Spark worker web UI
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: "spark://spark-master:7077"
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_MEMORY: 2G
+      SPARK_DAEMON_MEMORY: 1G      # Ajoutez cette ligne
+      SPARK_EXECUTOR_MEMORY: 1G    # Ajoutez cette ligne
+      SPARK_WORKER_WEBUI_PORT: 8081  # Meilleure pratique pour le port UI
+      SPARK_PUBLIC_DNS: spark-worker
+      SPARK_LOCAL_IP: spark-worker
+    networks:
+      - kafka-net
+    volumes:
+      - ./spark_consumer:/app
+      
+  spark-client:
+    build:
+      context: ./spark_consumer
+    container_name: spark-client
+    hostname: spark-client
+    depends_on:
+      - spark-master
+      - spark-worker
+      - kafka
+      - timescaledb
+      - producer
+    networks:
+      - kafka-net
+    volumes:
+      - ./spark_consumer:/app
+    working_dir: /app/app
+    command: >
+      bash -c "
+      /opt/bitnami/spark/bin/spark-submit
+      --master spark://spark-master:7077
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.postgresql:postgresql:42.2.23
+      --executor-memory 512m
+      --executor-cores 1
+      --driver-memory 512m
+      --driver-cores 1
+      --conf spark.executor.extraClassPath=/opt/bitnami/spark/jars/postgresql-42.2.23.jar
+      --conf spark.driver.extraClassPath=/opt/bitnami/spark/jars/postgresql-42.2.23.jar
+      consumer_test.py"
+
+
+  # Service Producteur Kafka
+  producer:
+    build: ./producer
+    container_name: producer
+    environment:
+      KAFKA_BROKER: "kafka:29092"
+      KAFKA_TOPIC: "ecommerce"
+      KAFKA_API_VERSION: "2.8"
+      IN_DOCKER: "true"
+    restart: unless-stopped  # Ajoutez cette ligne
+    stdin_open: true  # Keep STDIN open
+    tty: true  # Alloue un pseudo-TTY
+    networks:
+      - kafka-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    container_name: timescaledb
+    environment:
+      POSTGRES_DB: anomalie_detection
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./BD/automatized_DB.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: always
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "user", "-d", "anomalie_detection"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+    - kafka-net  
+
+  grafana:
+    build:
+      context: ./BD/grafana-dashboard
+      dockerfile: Dockerfile  # Use the custom Dockerfile
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    networks:
+      - kafka-net
+    depends_on:
+        - timescaledb 
+
+volumes:
+  grafana-storage:

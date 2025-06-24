@@ -1,0 +1,48 @@
+# Environnements virtuels
+.venv/
+# Virtual environment
+venv/
+# Logs
+*.log
+logs/
+__pycache__/
+*.pyc
+*.pkl
+*.csv
+*.json
+*.zip
+*.tar.gz
+.venv/
+.env
+.git/
+*.ipynb
+*.log
+# Python test cache
+*.pytest_cache/
+# OS files
+.DS_Store
+Thumbs.db
+# JetBrains IDE
+.idea/
+# VSCode config
+.vscode/
+# Zips ou archives
+*.zip
+# Zone.Identifier (fichiers Windows inutiles)
+*:Zone.Identifier
+# Données brutes ou volumineuses
+producer/app/large_ecommerce_transactions.csv
+spark_consumer/app/checkpoints/
+spark_consumer/app/logs/
+spark_consumer/model/*.joblib
+spark_consumer/model/*.json
+# Fichiers lourds à ne pas traquer
+*.joblib
+*.csv
+checkpoints/
+logs/
+.venv/
+find . -type f -size +90M
+
+# Images (optionnel si tu ne veux pas versionner des captures d’écran)
+*.png
